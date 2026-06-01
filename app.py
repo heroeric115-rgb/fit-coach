@@ -12,11 +12,19 @@ import json
 import hashlib
 import sqlite3
 import secrets
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from flask import Flask, request, jsonify, session, render_template
 import anthropic
+
+# 偵測是否使用 Postgres（DATABASE_URL 由 Render 自動注入）
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+USE_PG = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+if USE_PG:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
 
 # ── 設定 ──────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -35,77 +43,144 @@ app.config.update(
 )
 
 
-# ── 資料庫 ────────────────────────────────────────────────────────────────────
+# ── 資料庫抽象層 ──────────────────────────────────────────────────────────────
+class PgWrapper:
+    """讓 Postgres 連線提供類 sqlite3 介面（? placeholder、row_factory dict）。"""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=()):
+        cur = self._conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(sql.replace("?", "%s"), params)
+        return cur
+
+    def executescript(self, sql):
+        # PG 不支援 executescript，逐行執行
+        cur = self._conn.cursor()
+        for stmt in sql.split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                cur.execute(stmt)
+        return cur
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        if exc[0] is None:
+            self._conn.commit()
+        else:
+            self._conn.rollback()
+        self._conn.close()
+
+
+@contextmanager
 def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    if USE_PG:
+        # Render/Heroku 用 postgres://，psycopg2 v3+ 要 postgresql://
+        url = DATABASE_URL
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        conn = psycopg2.connect(url)
+        wrapper = PgWrapper(conn)
+        try:
+            yield wrapper
+            wrapper.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            wrapper.close()
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# ── Schema ────────────────────────────────────────────────────────────────────
+SQLITE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    pin_hash TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS user_profile (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT, age INTEGER, gender TEXT,
+    weight_kg REAL, height_cm REAL, target_weight_kg REAL,
+    resting_hr INTEGER DEFAULT 60,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS daily_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    log_date TEXT NOT NULL,
+    sleep_hours REAL, sleep_quality INTEGER, deep_sleep_hours REAL,
+    exercise_type TEXT, exercise_minutes INTEGER,
+    avg_heart_rate INTEGER, max_heart_rate INTEGER, calories_burned INTEGER,
+    weight_kg REAL, waist_cm REAL, water_ml INTEGER,
+    energy_level INTEGER, soreness INTEGER, notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, log_date)
+);
+CREATE TABLE IF NOT EXISTS recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    rec_date TEXT, content TEXT, tool_calls_json TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+PG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    pin_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS user_profile (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT, age INTEGER, gender TEXT,
+    weight_kg REAL, height_cm REAL, target_weight_kg REAL,
+    resting_hr INTEGER DEFAULT 60,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS daily_logs (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    log_date TEXT NOT NULL,
+    sleep_hours REAL, sleep_quality INTEGER, deep_sleep_hours REAL,
+    exercise_type TEXT, exercise_minutes INTEGER,
+    avg_heart_rate INTEGER, max_heart_rate INTEGER, calories_burned INTEGER,
+    weight_kg REAL, waist_cm REAL, water_ml INTEGER,
+    energy_level INTEGER, soreness INTEGER, notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, log_date)
+);
+CREATE TABLE IF NOT EXISTS recommendations (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    rec_date TEXT, content TEXT, tool_calls_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
 
 
 def init_db():
-    """初始化或升級 schema。若偵測到舊版 single-user 結構則整個重建。"""
     with db() as conn:
-        c = conn.cursor()
-        has_users = c.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
-        ).fetchone()
-        if not has_users:
-            # 沒有 users table → 舊版或全新。整個重建保證 schema 一致。
-            c.executescript("""
-                DROP TABLE IF EXISTS recommendations;
-                DROP TABLE IF EXISTS daily_logs;
-                DROP TABLE IF EXISTS user_profile;
-            """)
-        c.executescript("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                pin_hash TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS user_profile (
-                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-                name TEXT,
-                age INTEGER,
-                gender TEXT,
-                weight_kg REAL,
-                height_cm REAL,
-                target_weight_kg REAL,
-                resting_hr INTEGER DEFAULT 60,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS daily_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                log_date TEXT NOT NULL,
-                sleep_hours REAL,
-                sleep_quality INTEGER,
-                deep_sleep_hours REAL,
-                exercise_type TEXT,
-                exercise_minutes INTEGER,
-                avg_heart_rate INTEGER,
-                max_heart_rate INTEGER,
-                calories_burned INTEGER,
-                weight_kg REAL,
-                waist_cm REAL,
-                water_ml INTEGER,
-                energy_level INTEGER,
-                soreness INTEGER,
-                notes TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, log_date)
-            );
-            CREATE TABLE IF NOT EXISTS recommendations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                rec_date TEXT,
-                content TEXT,
-                tool_calls_json TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn.commit()
+        conn.executescript(PG_SCHEMA if USE_PG else SQLITE_SCHEMA)
 
 
 # ── 認證 ──────────────────────────────────────────────────────────────────────
@@ -388,13 +463,13 @@ def api_auth_login():
             uid = row["id"]
             created = False
         else:
+            # 用 RETURNING id 在 PG/SQLite 3.35+ 皆可
             cur = conn.execute(
-                "INSERT INTO users (username, pin_hash) VALUES (?, ?)",
+                "INSERT INTO users (username, pin_hash) VALUES (?, ?) RETURNING id",
                 (username, pin_h),
             )
-            uid = cur.lastrowid
+            uid = cur.fetchone()["id"]
             created = True
-            conn.commit()
 
     session.permanent = True
     session["user_id"] = uid
