@@ -432,6 +432,31 @@ def health():
     return {"ok": True, "model": MODEL}
 
 
+@app.route("/debug/db")
+def debug_db():
+    """檢查 DB 連線實際狀態 + 各 table 列數。"""
+    info = {
+        "use_pg": USE_PG,
+        "database_url_prefix": (DATABASE_URL[:35] + "...") if DATABASE_URL else "(empty)",
+        "database_url_host": "",
+    }
+    if DATABASE_URL:
+        # 從 URL 抓 host 部分（不含密碼）
+        try:
+            after_at = DATABASE_URL.split("@", 1)[1]
+            info["database_url_host"] = after_at.split("/", 1)[0]
+        except Exception:
+            pass
+    try:
+        with db() as conn:
+            for table in ("users", "user_profile", "daily_logs", "recommendations"):
+                row = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()
+                info[f"count_{table}"] = row["c"] if hasattr(row, "__getitem__") else row[0]
+    except Exception as e:
+        info["db_error"] = f"{type(e).__name__}: {e}"
+    return jsonify(info)
+
+
 # ── 路由：認證 ────────────────────────────────────────────────────────────────
 @app.route("/api/auth/me", methods=["GET"])
 def api_auth_me():
