@@ -429,3 +429,78 @@ tbody tr:hover { background: rgba(77, 171, 247, 0.05); }
 
 /* ── Chart canvas ─────────────────────────────────────── */
 canvas { max-width: 100%; }
+
+/* ── Login overlay ────────────────────────────────────── */
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 14, 19, 0.92);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: fadeIn 0.2s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.login-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px 28px;
+  max-width: 380px;
+  width: 100%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.login-brand {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  text-align: center;
+  margin-bottom: 8px;
+}
+.login-brand .dot { color: var(--primary); }
+.login-brand .ai {
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.login-sub {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  margin: 0 0 24px;
+  line-height: 1.6;
+}
+.login-sub small { font-size: 12px; opacity: 0.7; }
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.login-form label {
+  margin-bottom: 0;
+}
+.login-form input {
+  font-size: 16px;
+  padding: 12px 14px;
+}
+.login-form input[name="pin"] {
+  font-family: ui-monospace, monospace;
+  letter-spacing: 6px;
+  text-align: center;
+}
+.login-error {
+  background: rgba(255, 107, 107, 0.12);
+  color: var(--bad);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  border-left: 3px solid var(--bad);
+}
+.topright {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

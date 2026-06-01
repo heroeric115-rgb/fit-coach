@@ -10,6 +10,25 @@
 </head>
 <body>
 
+<!-- 登入 modal -->
+<div id="loginOverlay" class="login-overlay" hidden>
+  <div class="login-card">
+    <div class="login-brand">🏃 FitCoach<span class="dot">.</span><span class="ai">AI</span></div>
+    <p class="login-sub">輸入名字與 4 位 PIN 開始使用<br/><small>首次輸入會自動建立帳號</small></p>
+    <form id="loginForm" class="login-form">
+      <label>名字
+        <input name="username" required minlength="2" maxlength="20" placeholder="例：Eric" autocomplete="username" />
+      </label>
+      <label>PIN（4 位數字）
+        <input name="pin" required pattern="\d{4}" maxlength="4" inputmode="numeric"
+               placeholder="•••• " autocomplete="current-password" type="password" />
+      </label>
+      <div id="loginError" class="login-error" hidden></div>
+      <button type="submit" class="btn primary large">進入</button>
+    </form>
+  </div>
+</div>
+
 <header class="topbar">
   <div class="brand">🏃 FitCoach<span class="dot">.</span><span class="ai">AI</span></div>
   <nav class="tabs">
@@ -20,6 +39,7 @@
   </nav>
   <div class="topright">
     <span id="profileBadge" class="badge"></span>
+    <button id="logoutBtn" class="btn ghost small" hidden>登出</button>
   </div>
 </header>
 

@@ -1,10 +1,11 @@
-// FitCoach AI — 前端邏輯
+// FitCoach AI — 前端邏輯（多人版）
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 let trendChart = null;
 let cachedProfile = null;
+let currentUser = null;
 
 // ── Tab 切換 ─────────────────────────────────────────────
 function switchTab(name) {
@@ -19,8 +20,13 @@ $$(".tab").forEach((tab) => {
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     ...opts,
   });
+  if (res.status === 401) {
+    showLogin();
+    throw new Error("尚未登入");
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || `HTTP ${res.status}`);
@@ -28,15 +34,94 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+// ── 認證 ─────────────────────────────────────────────────
+function showLogin() {
+  $("#loginOverlay").hidden = false;
+  $("#logoutBtn").hidden = true;
+  setTimeout(() => $('#loginForm [name="username"]').focus(), 100);
+}
+
+function hideLogin() {
+  $("#loginOverlay").hidden = true;
+  $("#logoutBtn").hidden = false;
+}
+
+async function tryAuth() {
+  try {
+    const me = await fetch("/api/auth/me", { credentials: "same-origin" });
+    if (me.ok) {
+      currentUser = await me.json();
+      hideLogin();
+      return true;
+    }
+  } catch (e) {}
+  showLogin();
+  return false;
+}
+
+$("#loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const errEl = $("#loginError");
+  errEl.hidden = true;
+  try {
+    const r = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        username: fd.get("username"),
+        pin: fd.get("pin"),
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      errEl.textContent = data.error || "登入失敗";
+      errEl.hidden = false;
+      return;
+    }
+    currentUser = { username: data.username };
+    hideLogin();
+    e.target.reset();
+    await bootApp();
+    if (data.created) {
+      alert(`✅ 帳號已建立，歡迎 ${data.username}！\n第一步：到「設定」填寫你的個人資料。`);
+      switchTab("profile");
+    }
+  } catch (err) {
+    errEl.textContent = "網路錯誤，請重試";
+    errEl.hidden = false;
+  }
+});
+
+$("#logoutBtn").addEventListener("click", async () => {
+  await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+  currentUser = null;
+  cachedProfile = null;
+  if (trendChart) {
+    trendChart.destroy();
+    trendChart = null;
+  }
+  // 清畫面
+  $("#adviceContent").innerHTML = "";
+  $("#historyTable tbody").innerHTML = "";
+  $("#nudges").innerHTML = "";
+  $("#profileBadge").textContent = "";
+  showLogin();
+});
+
 // ── 個人資料 ─────────────────────────────────────────────
 async function loadProfile() {
   const p = await api("/api/profile");
   cachedProfile = p;
+  const userLabel = currentUser?.username ? `${currentUser.username}` : "";
   if (!p || !p.name) {
-    $("#profileBadge").textContent = "⚠ 尚未設定資料";
+    $("#profileBadge").textContent = userLabel
+      ? `👤 ${userLabel}・⚠ 未設定資料`
+      : "⚠ 尚未設定資料";
     return null;
   }
-  $("#profileBadge").textContent = `👤 ${p.name}・目標 ${p.target_weight_kg} kg`;
+  $("#profileBadge").textContent = `👤 ${userLabel || p.name}・目標 ${p.target_weight_kg} kg`;
 
   // 填入表單
   const form = $("#profileForm");
@@ -262,10 +347,8 @@ async function loadAdvice(forceNew = false) {
 
 $("#refreshAdviceBtn").addEventListener("click", () => loadAdvice(true));
 
-// ── 初始化 ───────────────────────────────────────────────
-window.switchTab = switchTab;
-
-(async function init() {
+// ── App 主流程 ──────────────────────────────────────────
+async function bootApp() {
   await loadProfile();
   await loadStats();
   await loadHistory();
@@ -274,8 +357,16 @@ window.switchTab = switchTab;
     await loadAdvice(false);
   } else {
     $("#adviceContent").innerHTML = `<div class="placeholder">
-      <p>👋 嗨！我是你的 AI 健身教練。<br/>請先到「設定」分頁填寫個人資料，我才能為你量身打造每日訓練。</p>
+      <p>👋 嗨 ${currentUser?.username || ""}！我是你的 AI 健身教練。<br/>請先到「設定」分頁填寫個人資料，我才能為你量身打造每日訓練。</p>
       <button class="btn primary" onclick="switchTab('profile')">前往設定</button>
     </div>`;
   }
+}
+
+// ── 初始化 ───────────────────────────────────────────────
+window.switchTab = switchTab;
+
+(async function init() {
+  const ok = await tryAuth();
+  if (ok) await bootApp();
 })();
