@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FitCoach AI — 個人健康減重智能助理</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">🏃 FitCoach<span class="dot">.</span><span class="ai">AI</span></div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="today">今日</button>
+    <button class="tab" data-tab="log">打卡</button>
+    <button class="tab" data-tab="history">歷史</button>
+    <button class="tab" data-tab="profile">設定</button>
+  </nav>
+  <div class="topright">
+    <span id="profileBadge" class="badge"></span>
+  </div>
+</header>
+
+<!-- 主動通知區（AI nudges） -->
+<div id="nudges" class="nudges"></div>
+
+<main class="container">
+
+  <!-- ── 今日 ──────────────────────────────────────────── -->
+  <section id="tab-today" class="panel active">
+    <div class="grid-2">
+      <div class="card hero-card">
+        <div class="hero-row">
+          <h2>🤖 今日 AI 建議</h2>
+          <button id="refreshAdviceBtn" class="btn ghost small">重新分析</button>
+        </div>
+        <div id="adviceContent" class="advice">
+          <div class="placeholder">
+            <div class="spinner"></div>
+            <p>正在召喚 AI 教練分析你的數據…</p>
+          </div>
+        </div>
+        <details id="agentTrace" class="trace" hidden>
+          <summary>🔍 Agent 推理過程（看 AI 用了哪些工具）</summary>
+          <pre id="agentTraceContent"></pre>
+        </details>
+      </div>
+
+      <div class="card">
+        <h3>📅 今日打卡</h3>
+        <div id="todayStatus" class="status-list"></div>
+        <button class="btn primary" onclick="switchTab('log')">前往打卡 →</button>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <div class="card stat">
+        <div class="stat-label">本週 Zone 2</div>
+        <div class="stat-value" id="statZone2">— <span class="unit">min</span></div>
+        <div class="stat-sub">目標 150–180 min</div>
+      </div>
+      <div class="card stat">
+        <div class="stat-label">7 天體重變化</div>
+        <div class="stat-value" id="statWeightDelta">—</div>
+        <div class="stat-sub" id="statWeightSub">—</div>
+      </div>
+      <div class="card stat">
+        <div class="stat-label">7 天腰圍變化</div>
+        <div class="stat-value" id="statWaistDelta">—</div>
+        <div class="stat-sub">內臟脂肪指標</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>📈 體重 / 腰圍趨勢</h3>
+      <canvas id="trendChart" height="80"></canvas>
+    </div>
+  </section>
+
+  <!-- ── 打卡 ──────────────────────────────────────────── -->
+  <section id="tab-log" class="panel">
+    <div class="card">
+      <h2>📝 今日打卡（<span id="todayLabel"></span>）</h2>
+      <form id="logForm" class="form">
+
+        <fieldset>
+          <legend>😴 睡眠</legend>
+          <label>睡眠時數 (h)
+            <input type="number" step="0.1" min="0" max="14" name="sleep_hours" value="7" />
+          </label>
+          <label>睡眠品質 (1-10)
+            <input type="range" name="sleep_quality" min="1" max="10" value="7" oninput="this.nextElementSibling.textContent=this.value" />
+            <output>7</output>
+          </label>
+          <label>深層睡眠 (h，可空)
+            <input type="number" step="0.1" min="0" max="6" name="deep_sleep_hours" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>🏃 運動</legend>
+          <label>類型
+            <select name="exercise_type">
+              <option value="zone2">Zone 2 有氧（燃脂）</option>
+              <option value="hiit">HIIT 高強度間歇</option>
+              <option value="strength">重量訓練</option>
+              <option value="rest">休息</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+          <label>時長 (分鐘)
+            <input type="number" min="0" max="300" name="exercise_minutes" value="30" />
+          </label>
+          <label>平均心率 (bpm，可空)
+            <input type="number" min="40" max="220" name="avg_heart_rate" />
+          </label>
+          <label>最高心率 (bpm，可空)
+            <input type="number" min="40" max="220" name="max_heart_rate" />
+          </label>
+          <label>消耗卡路里 (可空)
+            <input type="number" min="0" max="3000" name="calories_burned" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>⚖️ 身體數據</legend>
+          <label>體重 (kg)
+            <input type="number" step="0.1" min="30" max="200" name="weight_kg" />
+          </label>
+          <label><strong>腰圍 (cm)</strong> — 內臟脂肪指標
+            <input type="number" step="0.1" min="40" max="150" name="waist_cm" />
+          </label>
+          <label>飲水 (ml)
+            <input type="number" min="0" max="6000" name="water_ml" value="2000" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>💭 主觀感受</legend>
+          <label>精力指數 (1-10)
+            <input type="range" name="energy_level" min="1" max="10" value="7" oninput="this.nextElementSibling.textContent=this.value" />
+            <output>7</output>
+          </label>
+          <label>肌肉痠痛度 (1-10)
+            <input type="range" name="soreness" min="1" max="10" value="1" oninput="this.nextElementSibling.textContent=this.value" />
+            <output>1</output>
+          </label>
+          <label>備註
+            <textarea name="notes" rows="2" placeholder="今天的心情、特殊狀況…"></textarea>
+          </label>
+        </fieldset>
+
+        <button type="submit" class="btn primary large">💾 儲存今日打卡</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ── 歷史 ──────────────────────────────────────────── -->
+  <section id="tab-history" class="panel">
+    <div class="card">
+      <h2>📚 歷史記錄</h2>
+      <div class="table-wrap">
+        <table id="historyTable">
+          <thead>
+            <tr>
+              <th>日期</th><th>睡眠</th><th>品質</th>
+              <th>運動</th><th>分鐘</th><th>平均HR</th>
+              <th>體重</th><th>腰圍</th><th>精力</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 設定 ──────────────────────────────────────────── -->
+  <section id="tab-profile" class="panel">
+    <div class="card">
+      <h2>👤 個人資料</h2>
+      <form id="profileForm" class="form">
+        <label>姓名 <input name="name" required /></label>
+        <label>年齡 <input type="number" name="age" min="10" max="100" required /></label>
+        <label>性別
+          <select name="gender">
+            <option value="male">男</option>
+            <option value="female">女</option>
+            <option value="other">其他</option>
+          </select>
+        </label>
+        <label>目前體重 (kg) <input type="number" step="0.1" name="weight_kg" required /></label>
+        <label>身高 (cm) <input type="number" step="0.1" name="height_cm" required /></label>
+        <label>目標體重 (kg) <input type="number" step="0.1" name="target_weight_kg" required /></label>
+        <label>靜止心率 (bpm) <input type="number" name="resting_hr" value="60" min="40" max="100" /></label>
+        <button type="submit" class="btn primary">儲存個人資料</button>
+      </form>
+      <div id="profileSummary" class="summary"></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  FitCoach AI Agent — 期末作業 demo・Powered by Claude
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
