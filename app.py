@@ -329,17 +329,28 @@ AGENT_TOOLS = [
 ]
 
 
+def _json_default(o):
+    """讓 json.dumps 也能處理 Postgres 回傳的 datetime / date 物件。"""
+    if isinstance(o, (datetime, date)):
+        return o.isoformat()
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+def _jdumps(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, default=_json_default)
+
+
 def make_tool_runner(uid: int):
     """產生 closure，所有工具呼叫都鎖在這位 user 身上。"""
 
     def run_tool(name: str, args: dict) -> str:
         if name == "get_user_profile":
-            return json.dumps(get_profile(uid) or {}, ensure_ascii=False)
+            return _jdumps(get_profile(uid) or {})
         if name == "get_recent_logs":
-            return json.dumps(get_recent_logs(uid, args.get("days", 7)), ensure_ascii=False)
+            return _jdumps(get_recent_logs(uid, args.get("days", 7)))
         if name == "calculate_zone2_hr":
             low, high = zone2_range(args["age"], args.get("resting_hr", 60))
-            return json.dumps({"low": low, "high": high, "unit": "bpm"})
+            return _jdumps({"low": low, "high": high, "unit": "bpm"})
         if name == "get_weight_waist_trend":
             logs = get_recent_logs(uid, args.get("days", 30))
             series = [
@@ -351,8 +362,8 @@ def make_tool_runner(uid: int):
                 for l in logs
                 if l.get("weight_kg") or l.get("waist_cm")
             ]
-            return json.dumps(series, ensure_ascii=False)
-        return json.dumps({"error": f"unknown tool {name}"})
+            return _jdumps(series)
+        return _jdumps({"error": f"unknown tool {name}"})
 
     return run_tool
 
